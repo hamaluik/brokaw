@@ -1,12 +1,13 @@
+use async_std::io;
+use async_std::io::ErrorKind;
+use async_std::net::{TcpStream, ToSocketAddrs};
+use async_std::prelude::*;
 use std::fmt;
-use std::io;
-use std::io::{ErrorKind, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::time::Duration;
 
+use async_tls::TlsConnector;
 use log::*;
-use native_tls::TlsConnector;
 
 use crate::raw::compression::{Compression, Decoder};
 use crate::raw::error::Result;
@@ -36,7 +37,7 @@ impl TlsConfig {
     ///
     /// The `domain` will be used to validate server certs during any TLS handshakes.
     pub fn default_connector(domain: impl AsRef<str>) -> Result<Self> {
-        let connector = TlsConnector::new()?;
+        let connector = TlsConnector::new();
         Ok(Self {
             connector,
             domain: domain.as_ref().to_string(),
@@ -135,7 +136,7 @@ pub struct NntpConnection {
 
 impl NntpConnection {
     /// Connect to an NNTP server
-    pub fn connect(
+    pub async fn connect(
         addr: impl ToSocketAddrs,
         config: ConnectionConfig,
     ) -> Result<(Self, RawResponse)> {
@@ -149,13 +150,14 @@ impl NntpConnection {
         } = config.clone();
 
         trace!("Opening TcpStream...");
-        let tcp_stream = TcpStream::connect(&addr)?;
+        let tcp_stream = TcpStream::connect(&addr).await?;
 
-        tcp_stream.set_read_timeout(read_timeout)?;
+        // TODO: read time-outs in async land?
+        // tcp_stream.set_read_timeout(read_timeout)?;
 
         let nntp_stream = if let Some(TlsConfig { connector, domain }) = tls_config.as_ref() {
             trace!("Wrapping TcpStream w/ TlsConnector");
-            connector.connect(domain, tcp_stream)?.into()
+            connector.connect(domain, tcp_stream).await?.into()
         } else {
             trace!("No TLS config providing, continuing with plain text");
             tcp_stream.into()
@@ -171,14 +173,14 @@ impl NntpConnection {
             config,
         };
 
-        let initial_resp = conn.read_response_auto()?;
+        let initial_resp = conn.read_response_auto().await?;
 
         Ok((conn, initial_resp))
     }
 
     /// Create an NntpConnection with the default configuration
-    pub fn with_defaults(addr: impl ToSocketAddrs) -> Result<(Self, RawResponse)> {
-        Self::connect(addr, Default::default())
+    pub async fn with_defaults(addr: impl ToSocketAddrs) -> Result<(Self, RawResponse)> {
+        Self::connect(addr, Default::default()).await
     }
 
     /// Send a command to the server and read the response
@@ -187,28 +189,28 @@ impl NntpConnection {
     /// 1. Block while reading the response
     /// 2. Parse the response
     /// 2. This function *may* allocate depending on the size of the response
-    pub fn command<C: NntpCommand>(&mut self, command: &C) -> Result<RawResponse> {
-        self.send(command)?;
-        let resp = self.read_response_auto()?;
+    pub async fn command<C: NntpCommand>(&mut self, command: &C) -> Result<RawResponse> {
+        self.send(command).await?;
+        let resp = self.read_response_auto().await?;
         Ok(resp)
     }
 
     /// Send a command and specify whether the response is multiline
-    pub fn command_multiline<C: NntpCommand>(
+    pub async fn command_multiline<C: NntpCommand>(
         &mut self,
         command: &C,
         is_multiline: bool,
     ) -> Result<RawResponse> {
-        self.send(command)?;
-        let resp = self.read_response(Some(is_multiline))?;
+        self.send(command).await?;
+        let resp = self.read_response(Some(is_multiline)).await?;
         Ok(resp)
     }
 
     /// Send a command to the server, returning the number of bytes written
     ///
     /// The caller is responsible for reading the response
-    pub fn send<C: NntpCommand>(&mut self, command: &C) -> Result<usize> {
-        let bytes = self.send_bytes(command.encode())?;
+    pub async fn send<C: NntpCommand>(&mut self, command: &C) -> Result<usize> {
+        let bytes = self.send_bytes(command.encode()).await?;
         Ok(bytes)
     }
 
@@ -219,12 +221,12 @@ impl NntpConnection {
     ///
     /// * The caller is responsible for reading the response
     /// * The command SHOULD NOT include the CRLF terminator
-    pub fn send_bytes(&mut self, command: impl AsRef<[u8]>) -> Result<usize> {
+    pub async fn send_bytes(&mut self, command: impl AsRef<[u8]>) -> Result<usize> {
         let writer = self.stream.get_mut();
         // Write the command and terminal char
-        let bytes = writer.write(command.as_ref())? + writer.write(b"\r\n")?;
+        let bytes = writer.write(command.as_ref()).await? + writer.write(b"\r\n").await?;
         // Flush the buffer
-        writer.flush()?;
+        writer.flush().await?;
         Ok(bytes)
     }
 
@@ -236,8 +238,8 @@ impl NntpConnection {
     /// Note that this *will not* work for response codes that are not supported by [`Kind`].
     /// If you are using extensions/commands not implemented by Brokaw, please use
     /// [`NntpConnection::read_response`] to configure multiline support manually.
-    pub fn read_response_auto(&mut self) -> Result<RawResponse> {
-        self.read_response(None)
+    pub async fn read_response_auto(&mut self) -> Result<RawResponse> {
+        self.read_response(None).await
     }
 
     /// Read an NNTP response from the connection
@@ -247,10 +249,10 @@ impl NntpConnection {
     /// If `is_multiline` is set to None then the connection use [`ResponseCode::is_multiline`]
     /// to determine if it should expect a multiline response.
     /// This behavior can be overridden by manually specifying `Some(true)` or `Some(false)`
-    pub fn read_response(&mut self, is_multiline: Option<bool>) -> Result<RawResponse> {
+    pub async fn read_response(&mut self, is_multiline: Option<bool>) -> Result<RawResponse> {
         self.first_line_buf.truncate(0);
         self.data_blocks_buf.truncate(0);
-        let resp_code = read_initial_response(&mut self.stream, &mut self.first_line_buf)?;
+        let resp_code = read_initial_response(&mut self.stream, &mut self.first_line_buf).await?;
 
         let data_blocks = match (is_multiline, resp_code.is_multiline()) {
             // Check for data blocks if the caller tells us to OR the kind is multiline
@@ -271,7 +273,8 @@ impl NntpConnection {
                     }
                 };
 
-                read_data_blocks(&mut stream, &mut self.data_blocks_buf, &mut line_boundaries)?;
+                read_data_blocks(&mut stream, &mut self.data_blocks_buf, &mut line_boundaries)
+                    .await?;
 
                 Some(DataBlocks {
                     payload: self.data_blocks_buf.clone(),
@@ -399,8 +402,8 @@ impl ConnectionConfig {
     }
 
     /// Create a connection from the config
-    pub fn connect(&self, addr: impl ToSocketAddrs) -> Result<(NntpConnection, RawResponse)> {
-        NntpConnection::connect(addr, self.clone())
+    pub async fn connect(&self, addr: impl ToSocketAddrs) -> Result<(NntpConnection, RawResponse)> {
+        NntpConnection::connect(addr, self.clone()).await
     }
 }
 
@@ -408,11 +411,11 @@ impl ConnectionConfig {
 ///
 /// Per [RFC 3977](https://tools.ietf.org/html/rfc3977#section-3.1) the initial response
 /// should not exceed 512 bytes
-fn read_initial_response<S: io::BufRead>(
+async fn read_initial_response<S: io::BufRead + std::marker::Unpin>(
     stream: &mut S,
     buffer: &mut Vec<u8>,
 ) -> Result<ResponseCode> {
-    stream.read_until(b'\n', buffer)?;
+    stream.read_until(b'\n', buffer).await?;
     let (_initial_line_buffer, resp) = parse_first_line(&buffer).map_err(|_e| {
         io::Error::new(
             ErrorKind::InvalidData,
@@ -434,7 +437,7 @@ fn read_initial_response<S: io::BufRead>(
 /// * The `line_boundaries` vector will contain a list two-tuples containing the start and ending
 ///   of every line within the `buffer`
 /// * Note that depending on the command the total data size may be on the order of several megabytes!
-fn read_data_blocks<S: io::BufRead>(
+async fn read_data_blocks<S: io::BufRead + std::marker::Unpin>(
     stream: &mut S,
     buffer: &mut Vec<u8>,
     line_boundaries: &mut Vec<(usize, usize)>,
@@ -445,7 +448,7 @@ fn read_data_blocks<S: io::BufRead>(
     // n.b. - icky imperative style so that we have zero allocations outside of the reader
     loop {
         // n.b. - read_until will _append_ data from the current end of the vector
-        let bytes_read = stream.read_until(b'\n', buffer)?;
+        let bytes_read = stream.read_until(b'\n', buffer).await?;
 
         let (_empty, line) = parse_data_block_line(&buffer[read_head..]).map_err(|e| {
             trace!("parse_data_block_line failed -- {:?}", e);

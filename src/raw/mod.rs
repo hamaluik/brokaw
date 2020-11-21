@@ -1,6 +1,9 @@
 /// Raw connection implementation
 pub mod connection;
 
+/// Raw connection (using async/await)
+pub mod connection_async;
+
 /// Low level API errors
 pub mod error;
 
