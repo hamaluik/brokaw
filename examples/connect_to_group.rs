@@ -23,7 +23,8 @@ struct Opt {
     username: String,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[async_std::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
     let Opt {
@@ -55,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     info!("Connecting...");
-    let mut client = config.connect((address.as_str(), port))?;
+    let mut client = config.connect((address.as_str(), port)).await?;
 
     info!("Connected!");
     info!("Capabilities: {:#?}", client.capabilities());
@@ -63,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Group info: {:?}", client.group());
 
     info!("Closing connection...");
-    client.close()?;
+    client.close().await?;
     info!("Closed connection!");
 
     Ok(())

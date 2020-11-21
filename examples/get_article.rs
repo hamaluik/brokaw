@@ -3,7 +3,8 @@ use std::time::Duration;
 use brokaw::types::command as cmd;
 use brokaw::{ClientConfig, ConnectionConfig};
 
-fn main() -> anyhow::Result<()> {
+#[async_std::main]
+async fn main() -> anyhow::Result<()> {
     env_logger::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
     let mut client = ClientConfig::default()
@@ -13,12 +14,14 @@ fn main() -> anyhow::Result<()> {
                 .to_owned(),
         )
         .group(Some("mozilla.dev.platform"))
-        .connect(("news.mozilla.org", 119))?;
+        .connect(("news.mozilla.org", 119))
+        .await?;
 
     let highest_article = client.group().unwrap().high;
 
     let article = client
         .article(cmd::Article::Number(highest_article))
+        .await
         .and_then(|a| a.to_text())?;
 
     println!("~~~ 📰 `{}` ~~~", article.message_id());

@@ -24,7 +24,8 @@ struct Opt {
     password: Option<String>,
 }
 
-fn main() -> anyhow::Result<()> {
+#[async_std::main]
+async fn main() -> anyhow::Result<()> {
     env_logger::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
     let Opt {
@@ -53,7 +54,8 @@ fn main() -> anyhow::Result<()> {
                 .default_tls(&address)?
                 .to_owned(),
         )
-        .connect((address.as_str(), port))?;
+        .connect((address.as_str(), port))
+        .await?;
 
     let group = client.group().unwrap().to_owned();
 
@@ -66,12 +68,12 @@ fn main() -> anyhow::Result<()> {
     );
 
     info!("Enabling header compression");
-    client.command(XFeatureCompress)?.fail_unless(290)?;
+    client.command(XFeatureCompress).await?.fail_unless(290)?;
 
     let high = group.high;
     let low = high - num_headers;
     info!("Retrieving headers {} through {}", low, high);
-    let resp = client.conn().command(&XOver::Range { low, high })?;
+    let resp = client.conn().command(&XOver::Range { low, high }).await?;
     resp.data_blocks().unwrap().lines().for_each(|header| {
         let s = String::from_utf8_lossy(header).to_string();
         println!("{}", s);

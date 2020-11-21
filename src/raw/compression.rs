@@ -108,7 +108,10 @@ mod tests {
         let mut decoder = Compression::XFeature.decoder(&data_blocks[..]);
         let mut buf = String::new();
         // TODO: async testing
-        //decoder.read_to_string(&mut buf).unwrap();
-        //assert_eq!(buf, String::from_utf8(plain_resp.to_vec()).unwrap())
+        async_std::task::block_on(async {
+            use async_std::io::ReadExt;
+            decoder.read_to_string(&mut buf).await.unwrap();
+            assert_eq!(buf, String::from_utf8(plain_resp.to_vec()).unwrap())
+        });
     }
 }

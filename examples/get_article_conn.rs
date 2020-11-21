@@ -5,16 +5,19 @@ use brokaw::types::command as cmd;
 use brokaw::types::prelude::*;
 use brokaw::{ConnectionConfig, NntpConnection};
 
-fn main() -> anyhow::Result<()> {
+#[async_std::main]
+async fn main() -> anyhow::Result<()> {
     env_logger::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
     let (mut conn, _resp) =
-        NntpConnection::connect(("news.mozilla.org", 119), ConnectionConfig::default())?;
+        NntpConnection::connect(("news.mozilla.org", 119), ConnectionConfig::default()).await?;
 
-    let group_resp = conn.command(&cmd::Group("mozilla.dev.platform".to_string()))?;
+    let group_resp = conn
+        .command(&cmd::Group("mozilla.dev.platform".to_string()))
+        .await?;
     let group = Group::try_from(&group_resp)?;
 
-    let raw_article = conn.command(&cmd::Article::Number(group.high))?;
+    let raw_article = conn.command(&cmd::Article::Number(group.high)).await?;
 
     let article = BinaryArticle::try_from(&raw_article)?;
 

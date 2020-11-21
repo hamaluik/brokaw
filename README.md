@@ -38,8 +38,9 @@ brokaw = "*"
 ```rust
 use brokaw::client::ClientConfig;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = ClientConfig::default().connect(("news.mozilla.org", 119))?;
+#[async_std::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = ClientConfig::default().connect(("news.mozilla.org", 119)).await?;
 
     client.capabilities().iter()
         .for_each(|c| println!("{}", c));

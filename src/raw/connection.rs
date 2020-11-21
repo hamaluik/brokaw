@@ -106,15 +106,16 @@ impl fmt::Debug for TlsConfig {
 /// use brokaw::types::command as cmd;
 /// use brokaw::raw::connection::NntpConnection;
 ///
-/// fn main() -> Result<(), Box::<dyn std::error::Error>> {
+/// #[async_std::main]
+/// async fn main() -> Result<(), Box::<dyn std::error::Error>> {
 /// let (mut conn, init_resp) = NntpConnection::connect(
 ///         ("news.mozilla.org", 119),
 ///         ConnectionConfig::default()
 ///             .read_timeout(Some(Duration::from_secs(5)))
 ///             .to_owned(),
-///     )?;
+///     ).await?;
 ///     assert_eq!(init_resp.code(), ResponseCode::Known(Kind::PostingAllowed));
-///     let resp = conn.command(&cmd::Capabilities)?;
+///     let resp = conn.command(&cmd::Capabilities).await?;
 ///     let data_blocks = resp.data_blocks().unwrap();
 ///     assert_eq!(&resp.code(), &ResponseCode::Known(Kind::Capabilities));
 ///
@@ -143,10 +144,10 @@ impl NntpConnection {
         let ConnectionConfig {
             compression: _,
             tls_config,
-            read_timeout,
             write_timeout: _,
             first_line_buf_size,
             data_blocks_buf_size,
+            ..
         } = config.clone();
 
         trace!("Opening TcpStream...");

@@ -1,6 +1,6 @@
+use async_std::net::ToSocketAddrs;
 use std::borrow::Borrow;
 use std::convert::{TryFrom, TryInto};
-use std::net::ToSocketAddrs;
 
 use log::*;
 
@@ -89,19 +89,20 @@ impl NntpClient {
     ///     }
     /// }
     ///
-    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// #[async_std::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     use brokaw::client::{NntpClient, ClientConfig};
     ///     let mut client = ClientConfig::default()
-    ///         .connect(("news.modeswitching.notreal", 119))?;
+    ///         .connect(("news.modeswitching.notreal", 119)).await?;
     ///
-    ///     let resp: Motd = client.command(cmd::ModeReader)?.try_into()?;
+    ///     let resp: Motd = client.command(cmd::ModeReader).await?.try_into()?;
     ///     println!("Motd: {}", resp.motd);
     ///     Ok(())
     /// }
     /// ```
     /// </details>
-    pub fn command(&mut self, c: impl NntpCommand) -> Result<RawResponse> {
-        let resp = self.conn.command(&c)?;
+    pub async fn command(&mut self, c: impl NntpCommand) -> Result<RawResponse> {
+        let resp = self.conn.command(&c).await?;
         Ok(resp)
     }
 
@@ -116,8 +117,11 @@ impl NntpClient {
     }
 
     /// Select a newsgroup
-    pub fn select_group(&mut self, name: impl AsRef<str>) -> Result<Group> {
-        let resp = self.conn.command(&cmd::Group(name.as_ref().to_string()))?;
+    pub async fn select_group(&mut self, name: impl AsRef<str>) -> Result<Group> {
+        let resp = self
+            .conn
+            .command(&cmd::Group(name.as_ref().to_string()))
+            .await?;
 
         match resp.code() {
             ResponseCode::Known(Kind::GroupSelected) => {
@@ -140,10 +144,11 @@ impl NntpClient {
     }
 
     /// Retrieve updated capabilities from the server
-    pub fn update_capabilities(&mut self) -> Result<&Capabilities> {
+    pub async fn update_capabilities(&mut self) -> Result<&Capabilities> {
         let resp = self
             .conn
-            .command(&cmd::Capabilities)?
+            .command(&cmd::Capabilities)
+            .await?
             .fail_unless(Kind::Capabilities)?;
 
         let capabilities = Capabilities::try_from(&resp)?;
@@ -168,38 +173,42 @@ impl NntpClient {
     /// use brokaw::types::prelude::*;
     /// use brokaw::types::command::Article;
     ///
-    /// fn checked_conversion(client: &mut NntpClient) -> Result<TextArticle> {
-    ///     client.article(Article::Number(42))
+    /// async fn checked_conversion(client: &mut NntpClient) -> Result<TextArticle> {
+    ///     client.article(Article::Number(42)).await
     ///         .and_then(|b| b.to_text())
     /// }
     ///
-    /// fn lossy_conversion(client: &mut NntpClient) -> Result<TextArticle> {
-    ///     client.article(Article::Number(42))
+    /// async fn lossy_conversion(client: &mut NntpClient) -> Result<TextArticle> {
+    ///     client.article(Article::Number(42)).await
     ///         .map(|b| b.to_text_lossy())
     /// }
     ///
     /// ```
-    pub fn article(&mut self, article: cmd::Article) -> Result<BinaryArticle> {
-        let resp = self.conn.command(&article)?.fail_unless(Kind::Article)?;
+    pub async fn article(&mut self, article: cmd::Article) -> Result<BinaryArticle> {
+        let resp = self
+            .conn
+            .command(&article)
+            .await?
+            .fail_unless(Kind::Article)?;
 
         resp.borrow().try_into()
     }
 
     /// Retrieve the body for an article
-    pub fn body(&mut self, body: cmd::Body) -> Result<Body> {
-        let resp = self.conn.command(&body)?.fail_unless(Kind::Head)?;
+    pub async fn body(&mut self, body: cmd::Body) -> Result<Body> {
+        let resp = self.conn.command(&body).await?.fail_unless(Kind::Head)?;
         resp.borrow().try_into()
     }
 
     /// Retrieve the headers for an article
-    pub fn head(&mut self, head: cmd::Head) -> Result<Head> {
-        let resp = self.conn.command(&head)?.fail_unless(Kind::Head)?;
+    pub async fn head(&mut self, head: cmd::Head) -> Result<Head> {
+        let resp = self.conn.command(&head).await?.fail_unless(Kind::Head)?;
         resp.borrow().try_into()
     }
 
     /// Retrieve the status of an article
-    pub fn stat(&mut self, stat: cmd::Stat) -> Result<Option<Stat>> {
-        let resp = self.conn.command(&stat)?;
+    pub async fn stat(&mut self, stat: cmd::Stat) -> Result<Option<Stat>> {
+        let resp = self.conn.command(&stat).await?;
         match resp.code() {
             ResponseCode::Known(Kind::ArticleExists) => resp.borrow().try_into().map(Some),
             ResponseCode::Known(Kind::NoArticleWithMessageId)
@@ -210,10 +219,11 @@ impl NntpClient {
     }
 
     /// Close the connection to the server
-    pub fn close(&mut self) -> Result<RawResponse> {
+    pub async fn close(&mut self) -> Result<RawResponse> {
         let resp = self
             .conn
-            .command(&cmd::Quit)?
+            .command(&cmd::Quit)
+            .await?
             .fail_unless(Kind::ConnectionClosing)?;
 
         Ok(resp)
@@ -256,8 +266,9 @@ impl ClientConfig {
     }
 
     /// Resolves the configuration into a client
-    pub fn connect(&self, addr: impl ToSocketAddrs) -> Result<NntpClient> {
-        let (mut conn, conn_response) = NntpConnection::connect(addr, self.conn_config.clone())?;
+    pub async fn connect(&self, addr: impl ToSocketAddrs) -> Result<NntpClient> {
+        let (mut conn, conn_response) =
+            NntpConnection::connect(addr, self.conn_config.clone()).await?;
 
         debug!(
             "Connected. Server returned `{}`",
@@ -270,15 +281,15 @@ impl ClientConfig {
                 warn!("TLS is not enabled, credentials will be sent in the clear!");
             }
             debug!("Authenticating with AUTHINFO USER/PASS");
-            authenticate(&mut conn, username, password)?;
+            authenticate(&mut conn, username, password).await?;
         }
 
         debug!("Retrieving capabilities...");
-        let capabilities = get_capabilities(&mut conn)?;
+        let capabilities = get_capabilities(&mut conn).await?;
 
         let group = if let Some(name) = &self.group {
             debug!("Connecting to group {}...", name);
-            select_group(&mut conn, name)?.into()
+            select_group(&mut conn, name).await?.into()
         } else {
             debug!("No initial group specified");
             None
@@ -296,13 +307,15 @@ impl ClientConfig {
 impl RawResponse {}
 
 /// Perform an AUTHINFO USER/PASS exchange
-fn authenticate(
+async fn authenticate(
     conn: &mut NntpConnection,
     username: impl AsRef<str>,
     password: impl AsRef<str>,
 ) -> Result<()> {
     debug!("Sending AUTHINFO USER");
-    let user_resp = conn.command(&cmd::AuthInfo::User(username.as_ref().to_string()))?;
+    let user_resp = conn
+        .command(&cmd::AuthInfo::User(username.as_ref().to_string()))
+        .await?;
 
     if user_resp.code != ResponseCode::from(381) {
         return Err(Error::Failure {
@@ -313,7 +326,9 @@ fn authenticate(
     }
 
     debug!("Sending AUTHINFO PASS");
-    let pass_resp = conn.command(&cmd::AuthInfo::Pass(password.as_ref().to_string()))?;
+    let pass_resp = conn
+        .command(&cmd::AuthInfo::Pass(password.as_ref().to_string()))
+        .await?;
 
     if pass_resp.code() != ResponseCode::Known(Kind::AuthenticationAccepted) {
         return Err(Error::Failure {
@@ -327,8 +342,8 @@ fn authenticate(
     Ok(())
 }
 
-fn get_capabilities(conn: &mut NntpConnection) -> Result<Capabilities> {
-    let resp = conn.command(&cmd::Capabilities)?;
+async fn get_capabilities(conn: &mut NntpConnection) -> Result<Capabilities> {
+    let resp = conn.command(&cmd::Capabilities).await?;
 
     if resp.code() != ResponseCode::Known(Kind::Capabilities) {
         Err(Error::failure(resp))
@@ -337,8 +352,10 @@ fn get_capabilities(conn: &mut NntpConnection) -> Result<Capabilities> {
     }
 }
 
-fn select_group(conn: &mut NntpConnection, group: impl AsRef<str>) -> Result<Group> {
-    let resp = conn.command(&cmd::Group(group.as_ref().to_string()))?;
+async fn select_group(conn: &mut NntpConnection, group: impl AsRef<str>) -> Result<Group> {
+    let resp = conn
+        .command(&cmd::Group(group.as_ref().to_string()))
+        .await?;
 
     match resp.code() {
         ResponseCode::Known(Kind::GroupSelected) => Group::try_from(&resp),

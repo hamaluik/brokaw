@@ -1,5 +1,3 @@
-use std::net::TcpStream;
-
 /// Low level API Errors
 ///
 /// These errors represent (e.g. I/O, deserialization, parsing, etc).
@@ -12,10 +10,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
     /// An error raised by the system's TLS implementation
     #[error("TLS Error -- {0}")]
-    Tls(#[from] native_tls::Error),
-    /// The TLS Handshake has failed
-    #[error("TLS Handshake Error -- {0}")]
-    TlsHandshake(#[from] native_tls::HandshakeError<TcpStream>),
+    Tls(#[from] rustls::TLSError),
     /// The server returned data that could not be parsed
     ///
     /// This likely indicates that either a bug in Brokaw's response parser,
